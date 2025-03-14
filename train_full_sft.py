@@ -147,7 +147,11 @@ def init_model(lm_config):
     Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     model = model.to(args.device)
 
+
     # 如果指定了恢复训练，则加载检查点
+    # 初始化起始轮次
+    start_epoch = 0
+    start_step = 0
     if args.resume and args.checkpoint_path is not None:
         Logger(f"正在从检查点 {args.checkpoint_path} 恢复训练...")
         checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
@@ -161,7 +165,7 @@ def init_model(lm_config):
         start_step = checkpoint['step']
         Logger(f"成功恢复到 Epoch {start_epoch}, Step {start_step}")
 
-    return model, tokenizer
+    return model, tokenizer, start_epoch, start_step
 
 
 def init_distributed_mode():
@@ -268,7 +272,7 @@ if __name__ == "__main__":
     Logger(f"====================================\n")
     
     # 初始化模型和tokenizer
-    model, tokenizer = init_model(lm_config)
+    model, tokenizer, start_epoch, start_step = init_model(lm_config)
     
     # 记录模型信息
     if not ddp or dist.get_rank() == 0:
