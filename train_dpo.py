@@ -289,31 +289,7 @@ if __name__ == "__main__":
     torch.manual_seed(1337)  # 设置随机种子以保证可复现性
     device_type = "cuda" if "cuda" in args.device else "cpu"
 
-    # 记录训练配置信息
-    Logger("========== 训练配置信息 ==========")
-    Logger(f"模型配置:")
-    Logger(f"  - 隐藏层维度: {lm_config.dim}")
-    Logger(f"  - 层数: {lm_config.n_layers}")
-    Logger(f"  - 最大序列长度: {lm_config.max_seq_len}")
-    Logger(f"  - 是否使用MoE: {lm_config.use_moe}")
-    Logger(f"\n训练参数:")
-    Logger(f"  - 训练轮数: {args.epochs}")
-    Logger(f"  - 批次大小: {args.batch_size}")
-    Logger(f"  - 学习率: {args.learning_rate}")
-    Logger(f"  - 设备: {args.device}")
-    Logger(f"  - 数据类型: {args.dtype}")
-    Logger(f"  - 梯度累积步数: {args.accumulation_steps}")
-    Logger(f"  - 梯度裁剪阈值: {args.grad_clip}")
-    Logger(f"  - 是否使用分布式训练: {args.ddp}")
-    Logger(f"\n数据配置:")
-    Logger(f"  - 数据路径: {args.data_path}")
-    Logger(f"  - 每步token数: {tokens_per_iter}")
-    Logger(f"  - 是否从检查点恢复: {args.resume}")
-    if args.resume:
-        Logger(f"  - 检查点路径: {args.checkpoint_path}")
-    Logger(f"====================================\n")
-
-    # 设置wandb运行名称
+   # 设置wandb运行名称
     args.wandb_run_name = f"MiniMind-Full-DPO-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
 
     # 设置混合精度训练上下文
@@ -342,6 +318,30 @@ if __name__ == "__main__":
         writer.add_text('Training Config/Hyperparams', f'Epochs: {args.epochs}\nBatch size: {args.batch_size}\nLearning rate: {args.learning_rate}\nAccumulation steps: {args.accumulation_steps}')
     else:
         writer = None
+
+    # 记录训练配置信息
+    Logger("========== 训练配置信息 ==========")
+    Logger(f"模型配置:")
+    Logger(f"  - 隐藏层维度: {lm_config.dim}")
+    Logger(f"  - 层数: {lm_config.n_layers}")
+    Logger(f"  - 最大序列长度: {lm_config.max_seq_len}")
+    Logger(f"  - 是否使用MoE: {lm_config.use_moe}")
+    Logger(f"\n训练参数:")
+    Logger(f"  - 训练轮数: {args.epochs}")
+    Logger(f"  - 批次大小: {args.batch_size}")
+    Logger(f"  - 学习率: {args.learning_rate}")
+    Logger(f"  - 设备: {args.device}")
+    Logger(f"  - 数据类型: {args.dtype}")
+    Logger(f"  - 梯度累积步数: {args.accumulation_steps}")
+    Logger(f"  - 梯度裁剪阈值: {args.grad_clip}")
+    Logger(f"  - 是否使用分布式训练: {args.ddp}")
+    Logger(f"\n数据配置:")
+    Logger(f"  - 数据路径: {args.data_path}")
+    Logger(f"  - 每步token数: {tokens_per_iter}")
+    Logger(f"  - 是否从检查点恢复: {args.resume}")
+    if args.resume:
+        Logger(f"  - 检查点路径: {args.checkpoint_path}")
+    Logger(f"====================================\n")
 
     # 初始化模型和tokenizer
     model, ref_model, tokenizer = init_model(lm_config)

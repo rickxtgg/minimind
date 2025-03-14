@@ -243,14 +243,6 @@ if __name__ == "__main__":
         start_epoch = checkpoint['epoch'] + 1
         Logger(f"成功恢复训练状态，将从epoch {start_epoch}继续训练")
 
-    # 统计参数量
-    total_params = sum(p.numel() for p in model.parameters())  # 总参数数量
-    lora_params_count = sum(p.numel() for name, p in model.named_parameters() if 'lora' in name)  # LoRA参数数量
-    if not ddp or dist.get_rank() == 0:
-        print(f"LLM 总参数量: {total_params}")
-        print(f"LoRA 参数量: {lora_params_count}")
-        print(f"LoRA 参数占比: {lora_params_count / total_params * 100:.2f}%")
-
     # 冻结非LoRA参数
     for name, param in model.named_parameters():
         if 'lora' not in name:
@@ -280,6 +272,47 @@ if __name__ == "__main__":
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))
     # 计算每个epoch的迭代次数
     iter_per_epoch = len(train_loader)
+
+    # 统计参数量
+    total_params = sum(p.numel() for p in model.parameters())  # 总参数数量
+    lora_params_count = sum(p.numel() for name, p in model.named_parameters() if 'lora' in name)  # LoRA参数数量
+    if not ddp or dist.get_rank() == 0:
+        Logger(f"\n=== 训练配置信息 ===")
+        Logger(f"模型配置:")
+        Logger(f"- 总参数量: {total_params:,}")
+        Logger(f"- 隐藏层维度: {lm_config.dim}")
+        Logger(f"- 层数: {lm_config.n_layers}")
+        Logger(f"- 最大序列长度: {lm_config.max_seq_len}")
+        Logger(f"- 是否使用MoE: {lm_config.use_moe}")
+        
+        Logger(f"\nLoRA配置:")
+        Logger(f"- LoRA参数量: {lora_params_count:,}")
+        Logger(f"- LoRA参数占比: {lora_params_count / total_params * 100:.2f}%")
+        Logger(f"- LoRA权重保存名称: {args.lora_name}")
+        
+        Logger(f"\n优化器配置:")
+        Logger(f"- 学习率: {args.learning_rate}")
+        Logger(f"- 梯度累积步数: {args.accumulation_steps}")
+        Logger(f"- 梯度裁剪阈值: {args.grad_clip}")
+        Logger(f"- 预热迭代次数: {args.warmup_iters}")
+        
+        Logger(f"\n训练配置:")
+        Logger(f"- 训练轮数: {args.epochs}")
+        Logger(f"- 批次大小: {args.batch_size}")
+        Logger(f"- 训练设备: {args.device}")
+        Logger(f"- 训练精度: {args.dtype}")
+        Logger(f"- 是否使用分布式训练: {ddp}")
+        
+        Logger(f"\n数据集信息:")
+        Logger(f"- 数据集路径: {args.data_path}")
+        Logger(f"- 数据集大小: {len(train_ds):,} 样本")
+        Logger(f"- 每轮迭代次数: {iter_per_epoch:,}")
+        Logger(f"- 每次迭代处理token数: {tokens_per_iter:,}")
+        
+        Logger(f"\n硬件信息:")
+        Logger(f"- GPU设备: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU'}")
+        Logger(f"- 显存使用: {torch.cuda.memory_allocated() / 1024**2:.2f}MB / {torch.cuda.get_device_properties(0).total_memory / 1024**2:.2f}MB")
+        Logger("====================\n")
 
     # 开始训练循环
     for epoch in range(start_epoch, args.epochs):

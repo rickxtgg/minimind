@@ -300,6 +300,33 @@ if __name__ == "__main__":
     torch.manual_seed(1337)  # 设置随机种子以保证可复现性
     device_type = "cuda" if "cuda" in args.device else "cpu"
 
+    args.wandb_run_name = f"MiniMind-Dist-SFT-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
+
+    # 设置混合精度训练上下文
+    ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast()
+    ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
+    ddp_local_rank, DEVICE = 0, "cuda:0"
+    if ddp:
+        init_distributed_mode()
+        args.device = torch.device(DEVICE)
+
+    if args.use_wandb and (not ddp or ddp_local_rank == 0):
+        import wandb
+        wandb.init(project=args.wandb_project, name=args.wandb_run_name)
+    else:
+        wandb = None
+
+    # 初始化TensorBoard
+    if not ddp or ddp_local_rank == 0:
+        tb_writer = SummaryWriter(os.path.join(args.tensorboard_dir, args.wandb_run_name))
+        # 记录配置信息
+        tb_writer.add_text('Config/Student Model', f'Hidden dim: {lm_config_student.dim}, Layers: {lm_config_student.n_layers}, Max seq len: {lm_config_student.max_seq_len}, MoE: {lm_config_student.use_moe}')
+        tb_writer.add_text('Config/Teacher Model', f'Hidden dim: {lm_config_teacher.dim}, Layers: {lm_config_teacher.n_layers}, Max seq len: {lm_config_teacher.max_seq_len}, MoE: {lm_config_teacher.use_moe}')
+        tb_writer.add_text('Config/Training', f'Epochs: {args.epochs}, Batch size: {args.batch_size}, Learning rate: {args.learning_rate}, Device: {args.device}, Dtype: {args.dtype}')
+    else:
+        tb_writer = None
+
+
     # 记录训练配置信息
     Logger("========== 训练配置信息 ==========")
     Logger(f"学生模型配置:")
@@ -330,32 +357,6 @@ if __name__ == "__main__":
     if args.resume:
         Logger(f"  - 检查点路径: {args.checkpoint_path}")
     Logger(f"====================================\n")
-
-    args.wandb_run_name = f"MiniMind-Dist-SFT-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
-
-    # 设置混合精度训练上下文
-    ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast()
-    ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
-    ddp_local_rank, DEVICE = 0, "cuda:0"
-    if ddp:
-        init_distributed_mode()
-        args.device = torch.device(DEVICE)
-
-    if args.use_wandb and (not ddp or ddp_local_rank == 0):
-        import wandb
-        wandb.init(project=args.wandb_project, name=args.wandb_run_name)
-    else:
-        wandb = None
-
-    # 初始化TensorBoard
-    if not ddp or ddp_local_rank == 0:
-        tb_writer = SummaryWriter(os.path.join(args.tensorboard_dir, args.wandb_run_name))
-        # 记录配置信息
-        tb_writer.add_text('Config/Student Model', f'Hidden dim: {lm_config_student.dim}, Layers: {lm_config_student.n_layers}, Max seq len: {lm_config_student.max_seq_len}, MoE: {lm_config_student.use_moe}')
-        tb_writer.add_text('Config/Teacher Model', f'Hidden dim: {lm_config_teacher.dim}, Layers: {lm_config_teacher.n_layers}, Max seq len: {lm_config_teacher.max_seq_len}, MoE: {lm_config_teacher.use_moe}')
-        tb_writer.add_text('Config/Training', f'Epochs: {args.epochs}, Batch size: {args.batch_size}, Learning rate: {args.learning_rate}, Device: {args.device}, Dtype: {args.dtype}')
-    else:
-        tb_writer = None
 
     # 初始化学生模型和教师模型
     model, tokenizer = init_student_model(lm_config_student)
