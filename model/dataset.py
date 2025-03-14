@@ -11,10 +11,13 @@ from sklearn.model_selection import train_test_split
 import os
 import ast
 from tqdm import tqdm
-from train_pretrain import Logger #使用从预训练脚本中导入的自定义的日志记录器
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+def Logger(content):
+    # 在分布式训练中，只在主进程(rank 0)上打印日志
+    if not ddp or dist.get_rank() == 0:
+        print(content)
 
 def is_main_process():
     return not dist.is_initialized() or dist.get_rank() == 0
