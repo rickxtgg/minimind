@@ -96,8 +96,9 @@ class SFTDataset(Dataset):
         return self.file_length
 
     def _load_line(self, index):
-        if is_main_process():
-            Logger(f"正在加载第 {index + 1}/{self.file_length} 条数据")
+        # 每500000条数据输出一次加载进度
+        if is_main_process() and index % 500000 == 0:
+            Logger(f"正在加载数据: {index + 1}/{self.file_length} ({(index + 1)/self.file_length:.1%})")
         with open(self.jsonl_path, 'r', encoding='utf-8') as f:
             for i, line in enumerate(f):
                 if i == index:
