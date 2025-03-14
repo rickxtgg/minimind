@@ -16,7 +16,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def Logger(content):
     # 在分布式训练中，只在主进程(rank 0)上打印日志
-    if not ddp or dist.get_rank() == 0:
+    if is_main_process():
         print(content)
 
 def is_main_process():
