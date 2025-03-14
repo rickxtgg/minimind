@@ -11,6 +11,7 @@ from sklearn.model_selection import train_test_split
 import os
 import ast
 from tqdm import tqdm
+from train_pretrain import Logger #使用从预训练脚本中导入的自定义的日志记录器
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -63,18 +64,19 @@ class PretrainDataset(Dataset):
 
 
 class SFTDataset(Dataset):
-    def __init__(self, jsonl_path, tokenizer, max_length=1024, cache_size=10000):
+    def __init__(self, jsonl_path, tokenizer, max_length=1024, cache_size=10000, log_interval=1000):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.jsonl_path = jsonl_path
         self.cache_size = cache_size
         self.cache = {}
+        self.log_interval = log_interval
         if is_main_process():
-            print(f"开始统计数据集大小: {jsonl_path}")
+            Logger(f"开始统计数据集大小: {jsonl_path}")
         self.file_length = self._get_file_length()
         if is_main_process():
-            print(f"数据集大小统计完成，共 {self.file_length} 条样本")
+            Logger(f"数据集大小统计完成，共 {self.file_length} 条样本")
         self.bos_id = tokenizer('<s>assistant\n', add_special_tokens=False).input_ids
         self.eos_id = tokenizer('</s>\n', add_special_tokens=False).input_ids
         self.cache_hits = 0
@@ -91,6 +93,8 @@ class SFTDataset(Dataset):
         return self.file_length
 
     def _load_line(self, index):
+        if is_main_process():
+            Logger(f"正在加载第 {index + 1}/{self.file_length} 条数据")
         with open(self.jsonl_path, 'r', encoding='utf-8') as f:
             for i, line in enumerate(f):
                 if i == index:
@@ -102,8 +106,8 @@ class SFTDataset(Dataset):
         if len(self.cache) >= self.cache_size:
             oldest_key = next(iter(self.cache))
             del self.cache[oldest_key]
-            if is_main_process():
-                print(f"缓存已满，移除最早的项: {oldest_key}，当前缓存命中率: {self.cache_hits/(self.cache_hits+self.cache_misses):.2%}")
+            if is_main_process() and (self.cache_hits + self.cache_misses) % self.log_interval == 0:
+                Logger(f"缓存状态 - 大小: {len(self.cache)}/{self.cache_size}, 命中率: {self.cache_hits/(self.cache_hits+self.cache_misses):.2%} (命中: {self.cache_hits}, 未命中: {self.cache_misses})")
 
     def _create_chat_prompt(self, conversations):
         messages = []

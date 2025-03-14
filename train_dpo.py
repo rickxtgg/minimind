@@ -229,7 +229,8 @@ def init_model(lm_config):
     ref_model.eval()
     ref_model.requires_grad_(False)
 
-    Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
+    if not ddp or dist.get_rank() == 0:
+        Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     model = model.to(args.device)
     ref_model = ref_model.to(args.device)
 

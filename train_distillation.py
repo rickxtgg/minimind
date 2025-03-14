@@ -228,7 +228,8 @@ def init_student_model(lm_config):
     ckp = f'./out/full_sft_{lm_config.dim}{moe_path}.pth'
     state_dict = torch.load(ckp, map_location=args.device)
     model.load_state_dict(state_dict, strict=False)
-    Logger(f'学生模型(LLM)总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
+    if not ddp or dist.get_rank() == 0:
+        Logger(f'学生模型(LLM)总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     model = model.to(args.device)
 
     return model, tokenizer
@@ -246,7 +247,8 @@ def init_teacher_model(lm_config):
     ckp = f'./out/full_sft_{lm_config.dim}{moe_path}.pth'
     state_dict = torch.load(ckp, map_location=args.device)
     model.load_state_dict(state_dict, strict=False)
-    Logger(f'教师模型(LLM)总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
+    if not ddp or dist.get_rank() == 0:
+        Logger(f'教师模型(LLM)总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     model = model.to(args.device)
     return model
 
