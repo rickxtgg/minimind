@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import torch
+import torch.distributed as dist
 from sklearn.model_selection import train_test_split
 import os
 import ast
@@ -14,19 +15,25 @@ from tqdm import tqdm
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
+def is_main_process():
+    return not dist.is_initialized() or dist.get_rank() == 0
+
+
 class PretrainDataset(Dataset):
     def __init__(self, data_path, tokenizer, max_length=512):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
-        print(f"开始加载预训练数据: {data_path}")
+        if is_main_process():
+            print(f"开始加载预训练数据: {data_path}")
         self.samples = self.load_data(data_path)
-        print(f"预训练数据加载完成，共 {len(self.samples)} 条样本")
+        if is_main_process():
+            print(f"预训练数据加载完成，共 {len(self.samples)} 条样本")
 
     def load_data(self, path):
         samples = []
         with open(path, 'r', encoding='utf-8') as f:
-            for line in tqdm(f, desc="加载预训练数据"):
+            for line in tqdm(f, desc="加载预训练数据", disable=not is_main_process()):
                 data = json.loads(line.strip())
                 samples.append(data)
         return samples
@@ -63,9 +70,11 @@ class SFTDataset(Dataset):
         self.jsonl_path = jsonl_path
         self.cache_size = cache_size
         self.cache = {}
-        print(f"开始统计数据集大小: {jsonl_path}")
+        if is_main_process():
+            print(f"开始统计数据集大小: {jsonl_path}")
         self.file_length = self._get_file_length()
-        print(f"数据集大小统计完成，共 {self.file_length} 条样本")
+        if is_main_process():
+            print(f"数据集大小统计完成，共 {self.file_length} 条样本")
         self.bos_id = tokenizer('<s>assistant\n', add_special_tokens=False).input_ids
         self.eos_id = tokenizer('</s>\n', add_special_tokens=False).input_ids
         self.cache_hits = 0
@@ -93,7 +102,8 @@ class SFTDataset(Dataset):
         if len(self.cache) >= self.cache_size:
             oldest_key = next(iter(self.cache))
             del self.cache[oldest_key]
-            print(f"缓存已满，移除最早的项: {oldest_key}，当前缓存命中率: {self.cache_hits/(self.cache_hits+self.cache_misses):.2%}")
+            if is_main_process():
+                print(f"缓存已满，移除最早的项: {oldest_key}，当前缓存命中率: {self.cache_hits/(self.cache_hits+self.cache_misses):.2%}")
 
     def _create_chat_prompt(self, conversations):
         messages = []
@@ -159,14 +169,16 @@ class DPODataset(Dataset):
         self.padding = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
         self.bos_id = tokenizer('<s>assistant\n', add_special_tokens=False).input_ids
         self.eos_id = tokenizer('</s>\n', add_special_tokens=False).input_ids
-        print(f"开始加载DPO数据: {file_path}")
+        if is_main_process():
+            print(f"开始加载DPO数据: {file_path}")
         with open(file_path, 'r', encoding='utf-8') as f:
             self.data = []
             for line in tqdm(f, desc="加载DPO数据"):
                 line = line.strip()
                 obj = json.loads(line)
                 self.data.append(obj)
-        print(f"DPO数据加载完成，共 {len(self.data)} 条样本")
+        if is_main_process():
+            print(f"DPO数据加载完成，共 {len(self.data)} 条样本")
 
     def __len__(self):
         return len(self.data)
