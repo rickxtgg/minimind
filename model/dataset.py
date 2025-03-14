@@ -67,7 +67,7 @@ class PretrainDataset(Dataset):
 
 
 class SFTDataset(Dataset):
-    def __init__(self, jsonl_path, tokenizer, max_length=1024, cache_size=10000, log_interval=1000):
+    def __init__(self, jsonl_path, tokenizer, max_length=1024, cache_size=1000000, log_interval=100000):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
