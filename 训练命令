@@ -1,0 +1,16 @@
+#单卡训练命令
+python train_full_sft.py --epoch 6 --batch_size 64 --use_moe True --data_path dataset/converted_distill_r1_110k_sft.jsonl --max_seq_len 1024
+#多卡训练命令
+torchrun --nproc_per_node 2 train_full_sft.py --epoch 6 --batch_size 32 --use_moe True --data_path dataset/converted_distill_r1_110k_sft.jsonl --max_seq_len 1024
+
+#评估预训练模型"0: 预训练模型，1: SFT-Chat模型，2: RLHF-Chat模型，3: Reason模型"
+python eval_model.py --use_moe True --model_mode 0
+
+#评估sft监督训练模型
+python eval_model.py --use_moe True --model_mode 1
+
+#评估dpo微调训练模型
+python eval_model.py --use_moe True --model_mode 2
+
+#评估蒸馏微调训练模型
+python eval_model.py --use_moe True --model_mode 3
