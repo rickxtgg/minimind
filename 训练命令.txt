@@ -5,6 +5,12 @@ python train_pretrain.py --epoch 6 --batch_size 64
 
 torchrun --nproc_per_node 2 train_pretrain.py --epoch 6 --batch_size 64
 
+#单卡继续训练（根据实际情况选择数据集和继续训练的模型：dataset/distill_r1_110k_sft_converted_alt.jsonl，--resume --checkpoint_path out/pretrain_512.pth）
+python train_pretrain.py --epoch 6 --batch_size 128 --data_path  dataset/distill_r1_110k_sft_converted_alt.jsonl --resume --checkpoint_path out/pretrain_512.pth
+
+#多卡继续训练
+torchrun --nproc_per_node 2 train_pretrain.py --epoch 10 --batch_size 128 --data_path  dataset/distill_r1_110k_sft_converted_alt.jsonl --resume --checkpoint_path out/pretrain_512.pth
+
 #单卡监督训练命令
 torchrun --nproc_per_node 2 train_full_sft.py --epoch 6 --batch_size 64
 
