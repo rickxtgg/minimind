@@ -248,20 +248,7 @@ if __name__ == "__main__":
     if not ddp or dist.get_rank() == 0:
         tb_logger.log_model_info(model)
 
-    # 如果指定了检查点路径，从检查点恢复训练
-    if args.resume and args.checkpoint_path is not None:
-        Logger(f"正在从检查点 {args.checkpoint_path} 恢复训练...")
-        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
-        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-            model.module.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        start_epoch = checkpoint['epoch']
-        Logger(f"成功恢复到第 {start_epoch} 轮训练")
-    else:
-        start_epoch = 0
+
 
     # 创建数据集和数据加载器
     train_ds = PretrainDataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len)
@@ -286,7 +273,21 @@ if __name__ == "__main__":
         # 忽略位置编码参数的同步
         model._ddp_params_and_buffers_to_ignore = {"pos_cis"}
         model = DistributedDataParallel(model, device_ids=[ddp_local_rank])
-
+    # 如果指定了检查点路径，从检查点恢复训练
+    if args.resume and args.checkpoint_path is not None:
+        Logger(f"正在从检查点 {args.checkpoint_path} 恢复训练...")
+        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+            model.module.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        start_epoch = checkpoint['epoch']
+        Logger(f"成功恢复到第 {start_epoch} 轮训练")
+    else:
+        start_epoch = 0
+        
     # 开始训练
     Logger("开始训练...")
     iter_per_epoch = len(train_loader)
