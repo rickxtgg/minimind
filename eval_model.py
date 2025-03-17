@@ -46,8 +46,14 @@ def init_model(args):
 
         # 加载模型权重，排除mask相关参数
         state_dict = torch.load(ckp, map_location=args.device)
-        model.load_state_dict({k: v for k, v in state_dict.items() if 'mask' not in k}, strict=True)
-
+        
+        # 检查是否包含'model_state_dict'键（训练脚本保存的格式）
+        if 'model_state_dict' in state_dict:
+            model_state_dict = state_dict['model_state_dict']  # 只取模型权重部分
+        else:
+            model_state_dict = state_dict  # 直接使用整个状态字典
+            
+        model.load_state_dict({k: v for k, v in model_state_dict.items() if 'mask' not in k}, strict=False)  # 载入模型，并设置strict为False
         # 如果指定了LoRA名称，加载对应的LoRA权重
         if args.lora_name != 'None':
             apply_lora(model)
