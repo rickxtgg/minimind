@@ -135,7 +135,7 @@ def train_epoch(epoch, wandb):
             model.train()
 
 
-def init_model(lm_config):
+def init_model(lm_config, optimizer=None, scaler=None):
     # 初始化tokenizer和模型
     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     model = MiniMindLM(lm_config)
@@ -149,11 +149,12 @@ def init_model(lm_config):
     model = model.to(args.device)
 
 
-    # 如果指定了恢复训练，则加载检查点
     # 初始化起始轮次
     start_epoch = 0
     start_step = 0
-    if args.resume and args.checkpoint_path is not None:
+    
+    # 如果指定了恢复训练，则加载检查点
+    if args.resume and args.checkpoint_path is not None and optimizer is not None and scaler is not None:
         Logger(f"正在从检查点 {args.checkpoint_path} 恢复训练...")
         checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
         if isinstance(model, torch.nn.parallel.DistributedDataParallel):
@@ -165,6 +166,14 @@ def init_model(lm_config):
         start_epoch = checkpoint['epoch']
         start_step = checkpoint['step']
         Logger(f"成功恢复到 Epoch {start_epoch}, Step {start_step}")
+    else:
+        # 如果不是恢复训练，则加载预训练模型权重
+        moe_path = '_moe' if lm_config.use_moe else ''
+        ckp = f'./out/pretrain_{lm_config.dim}{moe_path}.pth'
+        state_dict = torch.load(ckp, map_location=args.device)
+        model.load_state_dict(state_dict, strict=False)
+        if not ddp or dist.get_rank() == 0:
+            Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
 
     return model, tokenizer, start_epoch, start_step
 
@@ -272,14 +281,8 @@ if __name__ == "__main__":
         Logger(f"  - 检查点路径: {args.checkpoint_path}")
     Logger(f"====================================\n")
     
-    # 初始化模型和tokenizer
-    model, tokenizer, start_epoch, start_step = init_model(lm_config)
-    
-    # 记录模型信息
-    if not ddp or dist.get_rank() == 0:
-        tb_logger.log_model_info(model)
-
     # 创建数据集和数据加载器
+    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     train_ds = SFTDataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if ddp else None  # 分布式采样器
     train_loader = DataLoader(
@@ -294,8 +297,19 @@ if __name__ == "__main__":
 
     # 初始化混合精度训练的GradScaler
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))
+    
+    # 初始化模型
+    model = MiniMindLM(lm_config).to(args.device)
+    
     # 初始化优化器
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
+    
+    # 初始化模型和恢复训练状态（如果需要）
+    model, tokenizer, start_epoch, start_step = init_model(lm_config, optimizer, scaler)
+    
+    # 记录模型信息
+    if not ddp or dist.get_rank() == 0:
+        tb_logger.log_model_info(model)
 
     # 配置分布式训练模型
     if ddp:
