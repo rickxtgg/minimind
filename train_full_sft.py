@@ -75,8 +75,8 @@ def train_epoch(epoch, wandb):
             # 根据梯度累积步数缩放损失
             loss = loss / args.accumulation_steps
 
-        # 反向传播
-        scaler.scale(loss).backward()
+            # 反向传播
+            scaler.scale(loss).backward()
 
         # 梯度累积：每accumulation_steps步才更新一次参数
         if (step + 1) % args.accumulation_steps == 0:
