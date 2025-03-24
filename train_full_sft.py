@@ -46,11 +46,13 @@ def get_lr(current_step, total_steps, lr):
     return lr / 10 + 0.5 * lr * (1 + math.cos(math.pi * current_step / total_steps))
 
 
-def train_epoch(epoch, wandb):
+def train_epoch(epoch, wandb, start_epoch, start_step):
     # 定义交叉熵损失函数，reduction='none'使得可以通过loss_mask进行加权
     loss_fct = nn.CrossEntropyLoss(reduction='none')
     start_time = time.time()
-    for step, (X, Y, loss_mask) in enumerate(train_loader):
+    # 如果是恢复训练且是恢复的那个epoch，从保存的step开始
+    current_step = start_step if epoch == start_epoch else 0
+    for step, (X, Y, loss_mask) in enumerate(train_loader, start=current_step):
         # 将数据移动到指定设备
         X = X.to(args.device)
         Y = Y.to(args.device)
@@ -135,7 +137,7 @@ def train_epoch(epoch, wandb):
             model.train()
 
 
-def init_model(lm_config):
+def init_model(lm_config, scaler):
     # 初始化tokenizer和模型
     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     model = MiniMindLM(lm_config)
@@ -147,6 +149,9 @@ def init_model(lm_config):
     if not ddp or dist.get_rank() == 0:
         Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     model = model.to(args.device)
+    
+    # 初始化优化器
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
 
 
     # 如果指定了恢复训练，则加载检查点
@@ -166,7 +171,7 @@ def init_model(lm_config):
         start_step = checkpoint['step']
         Logger(f"成功恢复到 Epoch {start_epoch}, Step {start_step}")
 
-    return model, tokenizer, start_epoch, start_step
+    return model, tokenizer, optimizer, start_epoch, start_step
 
 
 def init_distributed_mode():
@@ -274,8 +279,11 @@ if __name__ == "__main__":
         Logger(f"  - 检查点路径: {args.checkpoint_path}")
     Logger(f"====================================\n")
     
+    # 初始化混合精度训练的GradScaler
+    scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))
+    
     # 初始化模型和tokenizer
-    model, tokenizer, start_epoch, start_step = init_model(lm_config)
+    model, tokenizer, optimizer, start_epoch, start_step = init_model(lm_config, scaler)
     
     # 记录模型信息
     if not ddp or dist.get_rank() == 0:
@@ -294,11 +302,6 @@ if __name__ == "__main__":
         sampler=train_sampler
     )
 
-    # 初始化混合精度训练的GradScaler
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))
-    # 初始化优化器
-    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
-
     # 配置分布式训练模型
     if ddp:
         # 忽略位置编码参数的同步
@@ -309,7 +312,7 @@ if __name__ == "__main__":
     Logger("开始训练...")
     iter_per_epoch = len(train_loader)
     for epoch in range(start_epoch, args.epochs):
-        train_epoch(epoch, wandb)
+        train_epoch(epoch, wandb, start_epoch, start_step)
         # 记录每个epoch的指标
         if not ddp or dist.get_rank() == 0:
             metrics = {"epoch": epoch}
