@@ -47,10 +47,30 @@ def get_lr(current_step, total_steps, lr):
 
 
 def train_epoch(epoch, wandb):
-    # 定义交叉熵损失函数，reduction='none'使得可以通过loss_mask进行加权
+    # 每个epoch重新初始化数据加载器
+    train_sampler = DistributedSampler(train_ds) if ddp else None
+    if ddp:
+        train_sampler.set_epoch(epoch)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=args.batch_size,
+        pin_memory=True,
+        drop_last=False,
+        shuffle=False,
+        num_workers=args.num_workers,
+        sampler=train_sampler
+    )
+    
+    # 定义交叉熵损失函数
     loss_fct = nn.CrossEntropyLoss(reduction='none')
     start_time = time.time()
+    
+    # 修正step计数：仅在恢复训练的第一个epoch时使用保存的step
+    current_step = start_step if epoch == start_epoch else 0
+    
     for step, (X, Y, loss_mask) in enumerate(train_loader):
+        # 修正step显示
+        global_step = step + current_step
         # 将数据移动到指定设备
         X = X.to(args.device)
         Y = Y.to(args.device)
@@ -60,8 +80,9 @@ def train_epoch(epoch, wandb):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-        # 前向传播和损失计算
+        # 使用混合精度训练上下文
         with ctx:
+            # 前向传播
             res = model(X)
             # 计算损失：交叉熵损失 + 辅助损失（如MoE的负载均衡损失）
             loss = loss_fct(
@@ -74,23 +95,22 @@ def train_epoch(epoch, wandb):
             # 根据梯度累积步数缩放损失
             loss = loss / args.accumulation_steps
 
-            # 在自动混合精度上下文中进行梯度缩放和反向传播
-            scaled_loss = scaler.scale(loss)
-            scaled_loss.backward()
+        # 反向传播
+        scaler.scale(loss).backward()
 
-            # 梯度累积：每accumulation_steps步才更新一次参数
-            if (step + 1) % args.accumulation_steps == 0:
-                # 将梯度的scale还原回去
-                scaler.unscale_(optimizer)
-                # 梯度裁剪，防止梯度爆炸
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+        # 梯度累积：每accumulation_steps步才更新一次参数
+        if (step + 1) % args.accumulation_steps == 0:
+            # 将梯度的scale还原回去
+            scaler.unscale_(optimizer)
+            # 梯度裁剪，防止梯度爆炸
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
 
-                # 更新参数
-                scaler.step(optimizer)
-                scaler.update()
+            # 更新参数
+            scaler.step(optimizer)
+            scaler.update()
 
-                # 清空梯度
-                optimizer.zero_grad(set_to_none=True)
+            # 清空梯度
+            optimizer.zero_grad(set_to_none=True)
 
         # 定期打印训练信息
         if step % args.log_interval == 0:
@@ -99,7 +119,7 @@ def train_epoch(epoch, wandb):
                 'Epoch:[{}/{}]({}/{}) loss:{:.3f} lr:{:.12f} epoch_Time:{}min:'.format(
                     epoch + 1,
                     args.epochs,
-                    step,
+                    global_step,  # 使用修正后的step
                     iter_per_epoch,
                     loss.item(),
                     optimizer.param_groups[-1]['lr'],
@@ -135,7 +155,7 @@ def train_epoch(epoch, wandb):
             model.train()
 
 
-def init_model(lm_config, optimizer=None, scaler=None):
+def init_model(lm_config):
     # 初始化tokenizer和模型
     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     model = MiniMindLM(lm_config)
@@ -147,35 +167,7 @@ def init_model(lm_config, optimizer=None, scaler=None):
     if not ddp or dist.get_rank() == 0:
         Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     model = model.to(args.device)
-
-
-    # 初始化起始轮次
-    start_epoch = 0
-    start_step = 0
-    
-    # 如果指定了恢复训练，则加载检查点
-    if args.resume and args.checkpoint_path is not None and optimizer is not None and scaler is not None:
-        Logger(f"正在从检查点 {args.checkpoint_path} 恢复训练...")
-        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
-        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-            model.module.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        start_epoch = checkpoint['epoch']
-        start_step = checkpoint['step']
-        Logger(f"成功恢复到 Epoch {start_epoch}, Step {start_step}")
-    else:
-        # 如果不是恢复训练，则加载预训练模型权重
-        moe_path = '_moe' if lm_config.use_moe else ''
-        ckp = f'./out/pretrain_{lm_config.dim}{moe_path}.pth'
-        state_dict = torch.load(ckp, map_location=args.device)
-        model.load_state_dict(state_dict, strict=False)
-        if not ddp or dist.get_rank() == 0:
-            Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
-
-    return model, tokenizer, start_epoch, start_step
+    return model, tokenizer
 
 
 def init_distributed_mode():
@@ -220,7 +212,39 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true", help="是否从检查点恢复训练")  
     parser.add_argument("--checkpoint_path", type=str, default=None, help="检查点文件路径")
     args = parser.parse_args()
-
+    
+    # 添加GPU内存检查
+    if "cuda" in args.device:
+        try:
+            # 检查GPU是否可用
+            if not torch.cuda.is_available():
+                Logger("警告：CUDA不可用，将使用CPU训练")
+                args.device = "cpu"
+            else:
+                # 获取GPU内存信息
+                gpu_id = int(args.device.split(":")[-1]) if ":" in args.device else 0
+                total_memory = torch.cuda.get_device_properties(gpu_id).total_memory
+                reserved_memory = torch.cuda.memory_reserved(gpu_id)
+                allocated_memory = torch.cuda.memory_allocated(gpu_id)
+                free_memory = total_memory - reserved_memory
+                
+                Logger(f"GPU {gpu_id} 总内存: {total_memory/1024**2:.2f}MB")
+                Logger(f"GPU {gpu_id} 可用内存: {free_memory/1024**2:.2f}MB")
+                
+                # 估算模型所需内存（粗略估计）
+                model_size = args.dim * args.dim * args.n_layers * 4 * 4  # 粗略估计，单位为字节
+                batch_memory = args.batch_size * args.max_seq_len * args.dim * 4  # 粗略估计批次所需内存
+                
+                if (model_size + batch_memory) > free_memory * 0.9:  # 保留10%的余量
+                    Logger(f"警告：GPU内存可能不足！估计需要 {(model_size + batch_memory)/1024**2:.2f}MB")
+                    Logger("建议减小batch_size或模型大小，或增加梯度累积步数")
+                    if input("是否继续训练？(y/n): ").lower() != 'y':
+                        exit(0)
+        except Exception as e:
+            Logger(f"检查GPU内存时出错: {e}")
+            Logger("将使用CPU进行训练")
+            args.device = "cpu"
+    
     # 初始化模型配置
     lm_config = LMConfig(dim=args.dim, n_layers=args.n_layers, max_seq_len=args.max_seq_len, use_moe=args.use_moe)
     args.save_dir = os.path.join(args.out_dir)
@@ -281,8 +305,14 @@ if __name__ == "__main__":
         Logger(f"  - 检查点路径: {args.checkpoint_path}")
     Logger(f"====================================\n")
     
+    # 初始化模型和tokenizer
+    model, tokenizer = init_model(lm_config)
+    
+    # 记录模型信息
+    if not ddp or dist.get_rank() == 0:
+        tb_logger.log_model_info(model)
+
     # 创建数据集和数据加载器
-    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     train_ds = SFTDataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if ddp else None  # 分布式采样器
     train_loader = DataLoader(
@@ -295,21 +325,26 @@ if __name__ == "__main__":
         sampler=train_sampler
     )
 
-    # 初始化混合精度训练的GradScaler
+    # 初始化混合精度训练的GradScaler和优化器
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))
-    
-    # 初始化模型
-    model = MiniMindLM(lm_config).to(args.device)
-    
     # 初始化优化器
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
-    
-    # 初始化模型和恢复训练状态（如果需要）
-    model, tokenizer, start_epoch, start_step = init_model(lm_config, optimizer, scaler)
-    
-    # 记录模型信息
-    if not ddp or dist.get_rank() == 0:
-        tb_logger.log_model_info(model)
+
+    # 如果需要恢复训练，加载检查点
+    start_epoch = 0
+    start_step = 0
+    if args.resume and args.checkpoint_path is not None:
+        Logger(f"正在从检查点 {args.checkpoint_path} 恢复训练...")
+        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+            model.module.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        start_epoch = checkpoint['epoch']
+        start_step = checkpoint['step']
+        Logger(f"成功恢复到 Epoch {start_epoch}, Step {start_step}")
 
     # 配置分布式训练模型
     if ddp:
