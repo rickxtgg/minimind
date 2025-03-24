@@ -31,6 +31,10 @@ from model.tensorboard_utils import TensorBoardLogger
 
 warnings.filterwarnings('ignore')
 
+# 全局变量初始化
+ddp = int(os.environ.get("RANK", -1)) != -1  # 是否为分布式训练环境
+ddp_local_rank = 0
+DEVICE = "cuda:0"
 
 def Logger(content):
     # 在分布式训练中，只在主进程(rank 0)上打印日志
@@ -214,7 +218,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # 添加GPU内存检查
-    if "cuda" in args.device:
+    if "cuda" in args.device and (not ddp or dist.get_rank() == 0):
         try:
             # 检查GPU是否可用
             if not torch.cuda.is_available():
@@ -260,9 +264,8 @@ if __name__ == "__main__":
     # 设置混合精度训练上下文
     ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast()
 
-    # 检测是否为分布式训练环境
-    ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
-    ddp_local_rank, DEVICE = 0, "cuda:0"
+    # 使用全局变量
+    global ddp, ddp_local_rank, DEVICE
     if ddp:
         init_distributed_mode()
         args.device = torch.device(DEVICE)
