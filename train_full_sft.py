@@ -62,7 +62,7 @@ def train_epoch(epoch, wandb):
 
         # 使用混合精度训练上下文
         with ctx:
-            # 前向传播
+            # 前向传播和损失计算
             res = model(X)
             # 计算损失：交叉熵损失 + 辅助损失（如MoE的负载均衡损失）
             loss = loss_fct(
@@ -75,8 +75,9 @@ def train_epoch(epoch, wandb):
             # 根据梯度累积步数缩放损失
             loss = loss / args.accumulation_steps
 
-        # 反向传播
-        scaler.scale(loss).backward()
+            # 在自动混合精度上下文中进行梯度缩放和反向传播
+            scaled_loss = scaler.scale(loss)
+        scaled_loss.backward()
 
         # 梯度累积：每accumulation_steps步才更新一次参数
         if (step + 1) % args.accumulation_steps == 0:
