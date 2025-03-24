@@ -31,10 +31,6 @@ from model.tensorboard_utils import TensorBoardLogger
 
 warnings.filterwarnings('ignore')
 
-# 全局变量初始化
-ddp = int(os.environ.get("RANK", -1)) != -1  # 是否为分布式训练环境
-ddp_local_rank = 0
-DEVICE = "cuda:0"
 
 def Logger(content):
     # 在分布式训练中，只在主进程(rank 0)上打印日志
@@ -51,30 +47,10 @@ def get_lr(current_step, total_steps, lr):
 
 
 def train_epoch(epoch, wandb):
-    # 每个epoch重新初始化数据加载器
-    train_sampler = DistributedSampler(train_ds) if ddp else None
-    if ddp:
-        train_sampler.set_epoch(epoch)
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=args.batch_size,
-        pin_memory=True,
-        drop_last=False,
-        shuffle=False,
-        num_workers=args.num_workers,
-        sampler=train_sampler
-    )
-    
-    # 定义交叉熵损失函数
+    # 定义交叉熵损失函数，reduction='none'使得可以通过loss_mask进行加权
     loss_fct = nn.CrossEntropyLoss(reduction='none')
     start_time = time.time()
-    
-    # 修正step计数：仅在恢复训练的第一个epoch时使用保存的step
-    current_step = start_step if epoch == start_epoch else 0
-    
     for step, (X, Y, loss_mask) in enumerate(train_loader):
-        # 修正step显示
-        global_step = step + current_step
         # 将数据移动到指定设备
         X = X.to(args.device)
         Y = Y.to(args.device)
@@ -123,7 +99,7 @@ def train_epoch(epoch, wandb):
                 'Epoch:[{}/{}]({}/{}) loss:{:.3f} lr:{:.12f} epoch_Time:{}min:'.format(
                     epoch + 1,
                     args.epochs,
-                    global_step,  # 使用修正后的step
+                    step,
                     iter_per_epoch,
                     loss.item(),
                     optimizer.param_groups[-1]['lr'],
@@ -171,7 +147,26 @@ def init_model(lm_config):
     if not ddp or dist.get_rank() == 0:
         Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     model = model.to(args.device)
-    return model, tokenizer
+
+
+    # 如果指定了恢复训练，则加载检查点
+    # 初始化起始轮次
+    start_epoch = 0
+    start_step = 0
+    if args.resume and args.checkpoint_path is not None:
+        Logger(f"正在从检查点 {args.checkpoint_path} 恢复训练...")
+        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+            model.module.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        start_epoch = checkpoint['epoch']
+        start_step = checkpoint['step']
+        Logger(f"成功恢复到 Epoch {start_epoch}, Step {start_step}")
+
+    return model, tokenizer, start_epoch, start_step
 
 
 def init_distributed_mode():
@@ -218,7 +213,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # 添加GPU内存检查
-    if "cuda" in args.device and (not ddp or dist.get_rank() == 0):
+    if "cuda" in args.device:
         try:
             # 检查GPU是否可用
             if not torch.cuda.is_available():
@@ -264,8 +259,9 @@ if __name__ == "__main__":
     # 设置混合精度训练上下文
     ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast()
 
-    # 使用全局变量
-    global ddp, ddp_local_rank, DEVICE
+    # 检测是否为分布式训练环境
+    ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
+    ddp_local_rank, DEVICE = 0, "cuda:0"
     if ddp:
         init_distributed_mode()
         args.device = torch.device(DEVICE)
@@ -309,7 +305,7 @@ if __name__ == "__main__":
     Logger(f"====================================\n")
     
     # 初始化模型和tokenizer
-    model, tokenizer = init_model(lm_config)
+    model, tokenizer, start_epoch, start_step = init_model(lm_config)
     
     # 记录模型信息
     if not ddp or dist.get_rank() == 0:
@@ -328,26 +324,10 @@ if __name__ == "__main__":
         sampler=train_sampler
     )
 
-    # 初始化混合精度训练的GradScaler和优化器
+    # 初始化混合精度训练的GradScaler
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))
     # 初始化优化器
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
-
-    # 如果需要恢复训练，加载检查点
-    start_epoch = 0
-    start_step = 0
-    if args.resume and args.checkpoint_path is not None:
-        Logger(f"正在从检查点 {args.checkpoint_path} 恢复训练...")
-        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
-        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-            model.module.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        start_epoch = checkpoint['epoch']
-        start_step = checkpoint['step']
-        Logger(f"成功恢复到 Epoch {start_epoch}, Step {start_step}")
 
     # 配置分布式训练模型
     if ddp:
