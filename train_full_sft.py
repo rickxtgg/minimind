@@ -212,37 +212,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_path", type=str, default=None, help="检查点文件路径")
     args = parser.parse_args()
     
-    # 添加GPU内存检查
-    if "cuda" in args.device:
-        try:
-            # 检查GPU是否可用
-            if not torch.cuda.is_available():
-                Logger("警告：CUDA不可用，将使用CPU训练")
-                args.device = "cpu"
-            else:
-                # 获取GPU内存信息
-                gpu_id = int(args.device.split(":")[-1]) if ":" in args.device else 0
-                total_memory = torch.cuda.get_device_properties(gpu_id).total_memory
-                reserved_memory = torch.cuda.memory_reserved(gpu_id)
-                allocated_memory = torch.cuda.memory_allocated(gpu_id)
-                free_memory = total_memory - reserved_memory
-                
-                Logger(f"GPU {gpu_id} 总内存: {total_memory/1024**2:.2f}MB")
-                Logger(f"GPU {gpu_id} 可用内存: {free_memory/1024**2:.2f}MB")
-                
-                # 估算模型所需内存（粗略估计）
-                model_size = args.dim * args.dim * args.n_layers * 4 * 4  # 粗略估计，单位为字节
-                batch_memory = args.batch_size * args.max_seq_len * args.dim * 4  # 粗略估计批次所需内存
-                
-                if (model_size + batch_memory) > free_memory * 0.9:  # 保留10%的余量
-                    Logger(f"警告：GPU内存可能不足！估计需要 {(model_size + batch_memory)/1024**2:.2f}MB")
-                    Logger("建议减小batch_size或模型大小，或增加梯度累积步数")
-                    if input("是否继续训练？(y/n): ").lower() != 'y':
-                        exit(0)
-        except Exception as e:
-            Logger(f"检查GPU内存时出错: {e}")
-            Logger("将使用CPU进行训练")
-            args.device = "cpu"
+
     
     # 初始化模型配置
     lm_config = LMConfig(dim=args.dim, n_layers=args.n_layers, max_seq_len=args.max_seq_len, use_moe=args.use_moe)
@@ -335,6 +305,38 @@ if __name__ == "__main__":
         model._ddp_params_and_buffers_to_ignore = {"pos_cis"}
         model = DistributedDataParallel(model, device_ids=[ddp_local_rank])
 
+    # 添加GPU内存检查
+    if "cuda" in args.device:
+        try:
+            # 检查GPU是否可用
+            if not torch.cuda.is_available():
+                Logger("警告：CUDA不可用，将使用CPU训练")
+                args.device = "cpu"
+            else:
+                # 获取GPU内存信息
+                gpu_id = int(args.device.split(":")[-1]) if ":" in args.device else 0
+                total_memory = torch.cuda.get_device_properties(gpu_id).total_memory
+                reserved_memory = torch.cuda.memory_reserved(gpu_id)
+                allocated_memory = torch.cuda.memory_allocated(gpu_id)
+                free_memory = total_memory - reserved_memory
+                
+                Logger(f"GPU {gpu_id} 总内存: {total_memory/1024**2:.2f}MB")
+                Logger(f"GPU {gpu_id} 可用内存: {free_memory/1024**2:.2f}MB")
+                
+                # 估算模型所需内存（粗略估计）
+                model_size = args.dim * args.dim * args.n_layers * 4 * 4  # 粗略估计，单位为字节
+                batch_memory = args.batch_size * args.max_seq_len * args.dim * 4  # 粗略估计批次所需内存
+                
+                if (model_size + batch_memory) > free_memory * 0.9:  # 保留10%的余量
+                    Logger(f"警告：GPU内存可能不足！估计需要 {(model_size + batch_memory)/1024**2:.2f}MB")
+                    Logger("建议减小batch_size或模型大小，或增加梯度累积步数")
+                    if input("是否继续训练？(y/n): ").lower() != 'y':
+                        exit(0)
+        except Exception as e:
+            Logger(f"检查GPU内存时出错: {e}")
+            Logger("将使用CPU进行训练")
+            args.device = "cpu"
+            
     # 开始训练
     Logger("开始训练...")
     iter_per_epoch = len(train_loader)
