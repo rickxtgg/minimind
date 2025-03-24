@@ -305,55 +305,6 @@ if __name__ == "__main__":
         model._ddp_params_and_buffers_to_ignore = {"pos_cis"}
         model = DistributedDataParallel(model, device_ids=[ddp_local_rank])
 
-    # 添加设备内存检查
-    if isinstance(args.device, str) and 'cuda' in args.device or isinstance(args.device, torch.device) and args.device.type == 'cuda':
-        # GPU设备内存检查
-        try:
-            # 检查GPU是否可用
-            gpu_id = args.device.index if isinstance(args.device, torch.device) else (int(args.device.split(":")[-1]) if ":" in str(args.device) else 0)
-            # 获取GPU内存信息
-            total_memory = torch.cuda.get_device_properties(gpu_id).total_memory
-            reserved_memory = torch.cuda.memory_reserved(gpu_id)
-            allocated_memory = torch.cuda.memory_allocated(gpu_id)
-            free_memory = total_memory - reserved_memory
-                
-            Logger(f"GPU {gpu_id} 总内存: {total_memory/1024**2:.2f}MB")
-            Logger(f"GPU {gpu_id} 可用内存: {free_memory/1024**2:.2f}MB")
-            
-            # 估算模型所需内存
-            # 1. 模型参数内存
-            model_params = args.dim * args.dim * 4 * args.n_layers  # 每层的权重矩阵
-            model_params += args.dim * 4 * args.n_layers  # 每层的偏置项
-            model_params += args.dim * args.max_seq_len * 4  # 位置编码
-            
-            # 2. 优化器状态内存 (Adam需要两个状态向量)
-            optimizer_memory = model_params * 2
-            
-            # 3. 前向传播和反向传播的中间状态
-            activation_memory = model_params * 3
-            
-            # 4. 批次数据内存
-            batch_memory = args.batch_size * args.max_seq_len * args.dim * 4  # 输入数据
-            batch_memory += args.batch_size * args.max_seq_len * args.dim * 4  # 梯度
-            
-            # 总内存估算
-            total_memory = model_params + optimizer_memory + activation_memory + batch_memory
-            
-            if (model_size + batch_memory) > free_memory * 0.9:  # 保留10%的余量
-                Logger(f"警告：GPU内存可能不足！估计需要 {(model_size + batch_memory)/1024**2:.2f}MB")
-                Logger("建议减小batch_size或模型大小，或增加梯度累积步数")
-                if input("是否继续训练？(y/n): ").lower() != 'y':
-                    exit(0)
-            Logger(f'预计训练需要 {(model_size + batch_memory)/1024**2:.2f}MB')
-            Logger("GPU内存充足，继续训练...")
-        except Exception as e:
-            Logger(f"检查GPU内存时出错: {e}")
-            Logger("GPU内存检查失败，将使用CPU进行训练")
-            args.device = "cpu"
-    else:
-        Logger("使用CPU进行训练，跳过GPU内存检查")
-        Logger(f"预计训练需要内存: {(args.dim * args.dim * args.n_layers * 4 * 4 + args.batch_size * args.max_seq_len * args.dim * 4)/1024**2:.2f}MB")
-            
     # 开始训练
     Logger("开始训练...")
     iter_per_epoch = len(train_loader)
