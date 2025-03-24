@@ -60,9 +60,8 @@ def train_epoch(epoch, wandb):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-        # 使用混合精度训练上下文
+        # 前向传播和损失计算
         with ctx:
-            # 前向传播和损失计算
             res = model(X)
             # 计算损失：交叉熵损失 + 辅助损失（如MoE的负载均衡损失）
             loss = loss_fct(
@@ -77,21 +76,21 @@ def train_epoch(epoch, wandb):
 
             # 在自动混合精度上下文中进行梯度缩放和反向传播
             scaled_loss = scaler.scale(loss)
-        scaled_loss.backward()
+            scaled_loss.backward()
 
-        # 梯度累积：每accumulation_steps步才更新一次参数
-        if (step + 1) % args.accumulation_steps == 0:
-            # 将梯度的scale还原回去
-            scaler.unscale_(optimizer)
-            # 梯度裁剪，防止梯度爆炸
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            # 梯度累积：每accumulation_steps步才更新一次参数
+            if (step + 1) % args.accumulation_steps == 0:
+                # 将梯度的scale还原回去
+                scaler.unscale_(optimizer)
+                # 梯度裁剪，防止梯度爆炸
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
 
-            # 更新参数
-            scaler.step(optimizer)
-            scaler.update()
+                # 更新参数
+                scaler.step(optimizer)
+                scaler.update()
 
-            # 清空梯度
-            optimizer.zero_grad(set_to_none=True)
+                # 清空梯度
+                optimizer.zero_grad(set_to_none=True)
 
         # 定期打印训练信息
         if step % args.log_interval == 0:
